@@ -20,10 +20,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let name = physical_device_props.get_device_name().to_string_lossy();
         let vram_heap_size = physical_device_memory_props.get_memory_heaps()
             .iter()
-            .find_map(|x| { if x.flags.contains(vk::MemoryHeapFlags::DeviceLocal) { Some(x.size / 1024 / 1024) } else { None } })
+            .find_map(|x| { x.flags.contains(vk::MemoryHeapFlags::DeviceLocal).then(|| x.size) })
             .expect("No device local memory heap");
 
-        println!("{}: {} MB VRAM", name, vram_heap_size);
+        println!("{}: {} MB VRAM", name, vram_heap_size / 1024 / 1024);
     }
 
     return Ok(());
