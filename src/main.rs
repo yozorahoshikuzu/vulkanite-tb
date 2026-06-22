@@ -67,5 +67,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let device = physical_device.create_device(&device_create_info)?;
 
+    let queues = all_queue_families.iter()
+        .map(|x| device.get_queue(*x, 0))
+        .collect::<Vec<_>>();
+
+    let command_pool_create_info = vk::CommandPoolCreateInfo::default()
+        .queue_family_index(graphics_qfi.unwrap())
+        .flags(vk::CommandPoolCreateFlags::Transient);
+    let command_pool = device.create_command_pool(&command_pool_create_info)?;
+
+    let command_buffer_allocate_info = vk::CommandBufferAllocateInfo::default()
+        .command_pool(&command_pool)
+        .level(vk::CommandBufferLevel::Primary)
+        .command_buffer_count(1);
+
+    let command_buffers: Vec<_> = device.allocate_command_buffers(&command_buffer_allocate_info)?;
+    let command_buffer = command_buffers.first().expect("No command buffer");
+
+    let command_buffer_begin_info = vk::CommandBufferBeginInfo::default();
+
+    command_buffer.begin(&command_buffer_begin_info)?;
+
+    command_buffer.end()?;
+
+    unsafe {
+        device.free_command_buffers(&command_pool, command_buffers.as_slice());
+        device.destroy_command_pool(Some(&command_pool));
+        device.destroy();
+
+        instance.destroy();
+    }
+
     return Ok(());
 }

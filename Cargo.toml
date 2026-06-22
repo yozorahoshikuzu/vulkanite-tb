@@ -4,4 +4,4 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-vulkanite = { version = "0.0.12", features = ["loaded"] }
+vulkanite = { version = "0.0.12", features = ["loaded", "version_1_4", "ext_descriptor_indexing", "ext_buffer_device_address", "ext_deferred_host_operations", "ext_acceleration_structure", "ext_ray_tracing_pipeline", "ext_graphics_pipeline_library", "ext_pipeline_library"] }
