@@ -40,6 +40,8 @@ impl Drop for Buffer<'_> {
     }
 }
 
+const SIZE: u64 = 64 * 1024 * 1024;
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let vk_dispatcher = unsafe { vulkanite::DynamicDispatcher::new_loaded() }?;
     let vk_entry = vk::rs::Entry::new(vk_dispatcher, DefaultAllocator);
@@ -120,8 +122,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .flags(vk::FenceCreateFlags::Signaled);
     let fence = device.create_fence(&fence_create_info)?;
 
-    let mut src_buffer = ManuallyDrop::new(Buffer::new(&device, 640 * 1024 * 1024, 0)?);
-    let mut dst_buffer = ManuallyDrop::new(Buffer::new(&device, 640 * 1024 * 1024, 0)?);
+    let mut src_buffer = ManuallyDrop::new(Buffer::new(&device, SIZE, 0)?);
+    let mut dst_buffer = ManuallyDrop::new(Buffer::new(&device, SIZE, 0)?);
 
     for (queue, qfi) in queues.iter().zip(all_queue_families) {
         device.reset_fences(std::slice::from_ref(&fence))?;
@@ -147,7 +149,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         command_buffer.write_timestamp(vk::PipelineStageFlags::TopOfPipe, &query_pool, 0);
 
         let buffer_copy_region = vk::BufferCopy::default()
-            .size(640 * 1024 * 1024);
+            .size(SIZE);
 
         command_buffer.copy_buffer(&src_buffer.vk_handle, &dst_buffer.vk_handle, std::slice::from_ref(&buffer_copy_region));
 
