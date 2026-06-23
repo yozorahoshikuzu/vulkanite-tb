@@ -1,3 +1,4 @@
+use std::ffi::c_void;
 use vulkanite::{vk, DefaultAllocator, Dispatcher};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -46,6 +47,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let physical_device = physical_devices.first().expect("No physical devices");
+    let device_timestamp_unit = physical_device.get_properties().limits.timestamp_period;
 
     let mut all_queue_families = [graphics_qfi, ace_qfi, sdma_qfi].iter()
         .flatten()
@@ -71,28 +73,62 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|x| device.get_queue(*x, 0))
         .collect::<Vec<_>>();
 
-    let command_pool_create_info = vk::CommandPoolCreateInfo::default()
-        .queue_family_index(graphics_qfi.unwrap())
-        .flags(vk::CommandPoolCreateFlags::Transient);
-    let command_pool = device.create_command_pool(&command_pool_create_info)?;
+    let query_pool_create_info = vk::QueryPoolCreateInfo::default()
+        .query_type(vk::QueryType::Timestamp)
+        .query_count(2);
+    let query_pool = device.create_query_pool(&query_pool_create_info)?;
+    let fence_create_info = vk::FenceCreateInfo::default()
+        .flags(vk::FenceCreateFlags::Signaled);
+    let fence = device.create_fence(&fence_create_info)?;
 
-    let command_buffer_allocate_info = vk::CommandBufferAllocateInfo::default()
-        .command_pool(&command_pool)
-        .level(vk::CommandBufferLevel::Primary)
-        .command_buffer_count(1);
+    for (queue, qfi) in queues.iter().zip(all_queue_families) {
+        device.reset_fences(std::slice::from_ref(&fence))?;
+        let command_pool_create_info = vk::CommandPoolCreateInfo::default()
+            .queue_family_index(qfi)
+            .flags(vk::CommandPoolCreateFlags::Transient);
+        let command_pool = device.create_command_pool(&command_pool_create_info)?;
 
-    let command_buffers: Vec<_> = device.allocate_command_buffers(&command_buffer_allocate_info)?;
-    let command_buffer = command_buffers.first().expect("No command buffer");
+        let command_buffer_allocate_info = vk::CommandBufferAllocateInfo::default()
+            .command_pool(&command_pool)
+            .level(vk::CommandBufferLevel::Primary)
+            .command_buffer_count(1);
 
-    let command_buffer_begin_info = vk::CommandBufferBeginInfo::default();
+        let command_buffers: Vec<_> = device.allocate_command_buffers(&command_buffer_allocate_info)?;
+        let command_buffer = command_buffers.first().expect("No command buffer");
 
-    command_buffer.begin(&command_buffer_begin_info)?;
+        let command_buffer_begin_info = vk::CommandBufferBeginInfo::default()
+            .flags(vk::CommandBufferUsageFlags::OneTimeSubmit);
 
-    command_buffer.end()?;
+        command_buffer.begin(&command_buffer_begin_info)?;
+
+        command_buffer.reset_query_pool(&query_pool, 0, 2);
+        command_buffer.write_timestamp(vk::PipelineStageFlags::TopOfPipe, &query_pool, 0);
+        command_buffer.write_timestamp(vk::PipelineStageFlags::BottomOfPipe, &query_pool, 1);
+
+        command_buffer.end()?;
+
+        let submit_info = vk::SubmitInfo::default()
+            .command_buffers(command_buffers.as_slice());
+
+        queue.submit(&submit_info, Some(&fence))?;
+        device.wait_for_fences(std::slice::from_ref(&fence), true, u64::MAX)?;
+
+        let mut times: [u64; 2] = [0; 2];
+
+        device.get_query_pool_results(&query_pool, 0, 2, 8, times.as_mut_ptr() as *mut c_void, 8, vk::QueryResultFlags::Result64 | vk::QueryResultFlags::Wait)?;
+
+        let diff = (times[1] - times[0]) as f32 * device_timestamp_unit;
+        println!("queue {} nop cb latency: {} ns", qfi, diff);
+
+        unsafe {
+            device.free_command_buffers(&command_pool, command_buffers.as_slice());
+            device.destroy_command_pool(Some(&command_pool));
+        }
+    }
 
     unsafe {
-        device.free_command_buffers(&command_pool, command_buffers.as_slice());
-        device.destroy_command_pool(Some(&command_pool));
+        device.destroy_query_pool(Some(&query_pool));
+        device.destroy_fence(Some(&fence));
         device.destroy();
 
         instance.destroy();
