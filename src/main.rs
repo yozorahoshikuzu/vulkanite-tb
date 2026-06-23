@@ -1,13 +1,15 @@
 use std::ffi::c_void;
+use std::mem::ManuallyDrop;
 use vulkanite::{vk, DefaultAllocator, Dispatcher};
 
-struct Buffer {
+struct Buffer<'a> {
     vk_handle: vk::rs::Buffer,
     vk_memory_handle: vk::rs::DeviceMemory,
+    disp: &'a vk::rs::Device
 }
 
-impl Buffer {
-    pub fn new(device: &vk::rs::Device, size: u64, mem_index: u32) -> Result<Self, vk::Status> {
+impl<'a> Buffer<'a> {
+    pub fn new(device: &'a vulkanite::vk::rs::Device, size: u64, mem_index: u32) -> Result<Self, vk::Status> {
         let buffer_create_info = vk::BufferCreateInfo::default()
             .size(size)
             .usage(vk::BufferUsageFlags::TransferSrc | vk::BufferUsageFlags::TransferDst | vk::BufferUsageFlags::StorageBuffer);
@@ -25,7 +27,16 @@ impl Buffer {
         let memory = device.allocate_memory(&memory_allocate_info)?;
         device.bind_buffer_memory(&buffer, &memory, 0)?;
 
-        Ok(Buffer { vk_handle: buffer, vk_memory_handle: memory })
+        Ok(Buffer { vk_handle: buffer, vk_memory_handle: memory, disp: device })
+    }
+}
+
+impl Drop for Buffer<'_> {
+    fn drop(&mut self) {
+        unsafe {
+            self.disp.destroy_buffer(Some(&self.vk_handle));
+            self.disp.free_memory(Some(&self.vk_memory_handle));
+        }
     }
 }
 
@@ -109,8 +120,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .flags(vk::FenceCreateFlags::Signaled);
     let fence = device.create_fence(&fence_create_info)?;
 
-    let src_buffer = Buffer::new(&device, 640 * 1024 * 1024, 0)?;
-    let dst_buffer = Buffer::new(&device, 640 * 1024 * 1024, 0)?;
+    let mut src_buffer = ManuallyDrop::new(Buffer::new(&device, 640 * 1024 * 1024, 0)?);
+    let mut dst_buffer = ManuallyDrop::new(Buffer::new(&device, 640 * 1024 * 1024, 0)?);
 
     for (queue, qfi) in queues.iter().zip(all_queue_families) {
         device.reset_fences(std::slice::from_ref(&fence))?;
@@ -166,6 +177,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     unsafe {
         device.destroy_query_pool(Some(&query_pool));
         device.destroy_fence(Some(&fence));
+
+        ManuallyDrop::drop(&mut src_buffer);
+        ManuallyDrop::drop(&mut dst_buffer);
+
         device.destroy();
 
         instance.destroy();
