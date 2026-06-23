@@ -1,6 +1,34 @@
 use std::ffi::c_void;
 use vulkanite::{vk, DefaultAllocator, Dispatcher};
 
+struct Buffer {
+    vk_handle: vk::rs::Buffer,
+    vk_memory_handle: vk::rs::DeviceMemory,
+}
+
+impl Buffer {
+    pub fn new(device: &vk::rs::Device, size: u64, mem_index: u32) -> Result<Self, vk::Status> {
+        let buffer_create_info = vk::BufferCreateInfo::default()
+            .size(size)
+            .usage(vk::BufferUsageFlags::TransferSrc | vk::BufferUsageFlags::TransferDst | vk::BufferUsageFlags::StorageBuffer);
+        let buffer = device.create_buffer(&buffer_create_info)?;
+
+        let memory_requirements = device.get_buffer_memory_requirements(&buffer);
+
+        if memory_requirements.memory_type_bits & (1 << mem_index) == 0 {
+            panic!("Memory type index {} is not supported", mem_index);
+        }
+
+        let memory_allocate_info = vk::MemoryAllocateInfo::default()
+            .allocation_size(memory_requirements.size)
+            .memory_type_index(mem_index);
+        let memory = device.allocate_memory(&memory_allocate_info)?;
+        device.bind_buffer_memory(&buffer, &memory, 0)?;
+
+        Ok(Buffer { vk_handle: buffer, vk_memory_handle: memory })
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let vk_dispatcher = unsafe { vulkanite::DynamicDispatcher::new_loaded() }?;
     let vk_entry = vk::rs::Entry::new(vk_dispatcher, DefaultAllocator);
@@ -81,6 +109,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .flags(vk::FenceCreateFlags::Signaled);
     let fence = device.create_fence(&fence_create_info)?;
 
+    let src_buffer = Buffer::new(&device, 640 * 1024 * 1024, 0)?;
+    let dst_buffer = Buffer::new(&device, 640 * 1024 * 1024, 0)?;
+
     for (queue, qfi) in queues.iter().zip(all_queue_families) {
         device.reset_fences(std::slice::from_ref(&fence))?;
         let command_pool_create_info = vk::CommandPoolCreateInfo::default()
@@ -103,6 +134,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         command_buffer.reset_query_pool(&query_pool, 0, 2);
         command_buffer.write_timestamp(vk::PipelineStageFlags::TopOfPipe, &query_pool, 0);
+
+        let buffer_copy_region = vk::BufferCopy::default()
+            .size(640 * 1024 * 1024);
+
+        command_buffer.copy_buffer(&src_buffer.vk_handle, &dst_buffer.vk_handle, std::slice::from_ref(&buffer_copy_region));
+
         command_buffer.write_timestamp(vk::PipelineStageFlags::BottomOfPipe, &query_pool, 1);
 
         command_buffer.end()?;
@@ -118,7 +155,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         device.get_query_pool_results(&query_pool, 0, 2, 8, times.as_mut_ptr() as *mut c_void, 8, vk::QueryResultFlags::Result64 | vk::QueryResultFlags::Wait)?;
 
         let diff = (times[1] - times[0]) as f32 * device_timestamp_unit;
-        println!("queue {} nop cb latency: {} ns", qfi, diff);
+        println!("queue {} copy latency: {} ns", qfi, diff);
 
         unsafe {
             device.free_command_buffers(&command_pool, command_buffers.as_slice());
